@@ -1,0 +1,200 @@
+From 4552264b4a73101658cbc233246e5f5410c9bdd3 Mon Sep 17 00:00:00 2001
+From: Alexander Lutay <alutay@sipwise.com>
+Date: Wed, 22 May 2013 20:41:18 +0300
+Subject: [PATCH] Add console mode support to diffpdf.
+
+The output.pdf will be generated (if specified as third attribute).
+GUI will not be started in this case. Useful for CI Jenkins.
+---
+ main.cpp       | 13 +++++++++----
+ mainwindow.cpp | 36 +++++++++++++++++++++++++++++-------
+ mainwindow.hpp |  9 +++++----
+ 3 files changed, 43 insertions(+), 15 deletions(-)
+
+diff --git a/main.cpp b/main.cpp
+index 4e62aab..1eea2f3 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -42,6 +42,7 @@ int main(int argc, char *argv[])
+     const QString LanguageOption = "--language=";
+     QString filename1;
+     QString filename2;
++    QString filename3;
+     QString language = QLocale::system().name();
+     bool optionsOK = true;
+     Debug debug = DebugOff;
+@@ -55,11 +56,12 @@ int main(int argc, char *argv[])
+         else if (optionsOK && arg.startsWith(LanguageOption))
+             language = arg.mid(LanguageOption.length());
+         else if (optionsOK && (arg == "--help" || arg == "-h")) {
+-            out << "usage: diffpdf [options] [file1.pdf [file2.pdf]]\n\n"
++            out << "usage: diffpdf [options] [file1.pdf [file2.pdf [output.pdf]]]\n\n"
+                 "A GUI program that compares two PDF files and shows "
+                 "their differences.\n"
+                 "\nThe files are optional and are normally set "
+-                "through the user interface.\n\n"
++                "through the user interface.\n"
++                "If output.pdf is defined - console/Jenkins mode is enabled (no GUI).\n\n"
+                 "options:\n"
+                 "--help        -h   show this usage text and terminate "
+                 "(run the program without this option and press F1 for "
+@@ -97,6 +99,8 @@ int main(int argc, char *argv[])
+             filename1 = arg;
+         else if (filename2.isEmpty() && arg.toLower().endsWith(".pdf"))
+             filename2 = arg;
++        else if (filename3.isEmpty() && arg.toLower().endsWith(".pdf"))
++            filename3 = arg;
+         else
+             out << "unrecognized argument '" << arg << "'\n";
+     }
+@@ -109,9 +113,10 @@ int main(int argc, char *argv[])
+     appTranslator.load("diffpdf_" + language, ":/");
+     app.installTranslator(&appTranslator);
+ 
+-    MainWindow window(debug, comparisonMode, filename1, filename2,
++    MainWindow window(debug, comparisonMode, filename1, filename2, filename3,
+             language.left(2)); // We want de not de_DE etc.
+-    window.show();
++    if (filename3.isEmpty())
++        window.show();
+     return app.exec();
+ }
+ 
+diff --git a/mainwindow.cpp b/mainwindow.cpp
+index 0d31655..f9edd5c 100644
+--- a/mainwindow.cpp
++++ b/mainwindow.cpp
+@@ -48,7 +48,7 @@
+ 
+ MainWindow::MainWindow(const Debug debug,
+         const InitialComparisonMode comparisonMode,
+-        const QString &filename1, const QString &filename2,
++        const QString &filename1, const QString &filename2, const QString &filename3,
+         const QString &language, QWidget *parent)
+     : QMainWindow(parent),
+       controlDockArea(Qt::RightDockWidgetArea),
+@@ -73,7 +73,7 @@ MainWindow::MainWindow(const Debug debug,
+     QPixmapCache::setCacheLimit(1000 *
+             qBound(1, settings.value("CacheSizeMB", 25).toInt(), 100));
+ 
+-    createWidgets(filename1, filename2);
++    createWidgets(filename1, filename2, filename3);
+     createCentralArea();
+     createDockWidgets();
+     createConnections();
+@@ -103,12 +103,14 @@ MainWindow::MainWindow(const Debug debug,
+     compareComboBox->setCurrentIndex(comparisonMode);
+     QMetaObject::invokeMethod(this, "initialize", Qt::QueuedConnection,
+             Q_ARG(QString, filename1),
+-            Q_ARG(QString, filename2));
++            Q_ARG(QString, filename2),
++            Q_ARG(QString, filename3));
+ }
+ 
+ 
+ void MainWindow::createWidgets(const QString &filename1,
+-                               const QString &filename2)
++                               const QString &filename2,
++                               const QString &filename3)
+ {
+     setFile1Button = new QPushButton(tr("File #&1..."));
+     setFile1Button->setToolTip(tr("<p>Choose the first (left hand) file "
+@@ -126,6 +128,10 @@ void MainWindow::createWidgets(const QString &filename1,
+     filename2LineEdit->setAlignment(Qt::AlignVCenter|Qt::AlignRight);
+     filename2LineEdit->setMinimumWidth(100);
+     filename2LineEdit->setText(filename2);
++    filename3LineEdit = new LineEdit;
++    filename3LineEdit->setToolTip(tr("Hidden variable storage"));
++    filename3LineEdit->setMinimumWidth(0);
++    filename3LineEdit->setText(filename3);
+     comparePages1Label = new QLabel(tr("Pa&ges:"));
+     pages1LineEdit = new QLineEdit;
+     comparePages1Label->setBuddy(pages1LineEdit);
+@@ -616,7 +622,8 @@ void MainWindow::createConnections()
+ 
+ 
+ void MainWindow::initialize(const QString &filename1,
+-                            const QString &filename2)
++                            const QString &filename2,
++                            const QString &filename3)
+ {
+     if (!filename1.isEmpty()) {
+         setFile1(filename1);
+@@ -624,6 +631,10 @@ void MainWindow::initialize(const QString &filename1,
+         if (!filename2.isEmpty()) {
+             setFile2(filename2);
+             compare();
++	    if (!filename3.isEmpty()) {
++		save();
++		exit(0);
++	    }
+         }
+     }
+     else
+@@ -1580,8 +1591,19 @@ void MainWindow::options()
+ 
+ void MainWindow::save()
+ {
+-    SaveForm form(currentPath, &saveFilename, &saveAll, &savePages, this);
+-    if (form.exec()) {
++   bool b_temp = false;
++
++   if (!(filename3LineEdit->text()).isEmpty()) {
++	saveFilename = filename3LineEdit->text();
++	saveAll = 1;
++	savePages = SaveBothPages;
++        b_temp = true;
++   } else {
++	SaveForm form(currentPath, &saveFilename, &saveAll, &savePages, this);
++	b_temp = form.exec();
++   };
++
++   if (b_temp) {
+         QString filename1 = filename1LineEdit->text();
+         PdfDocument pdf1 = getPdf(filename1);
+         if (!pdf1)
+diff --git a/mainwindow.hpp b/mainwindow.hpp
+index ee75308..3b71d20 100644
+--- a/mainwindow.hpp
++++ b/mainwindow.hpp
+@@ -50,7 +50,7 @@ class MainWindow : public QMainWindow
+ public:
+     MainWindow(const Debug debug,
+             const InitialComparisonMode comparisonMode,
+-            const QString &filename1, const QString &filename2,
++            const QString &filename1, const QString &filename2, const QString &filename3,
+             const QString &language, QWidget *parent=0);
+ 
+ protected:
+@@ -62,12 +62,12 @@ private slots:
+     void setFile2(QString filename=QString());
+     void setFiles1(const QStringList &filenames);
+     void setFiles2(const QStringList &filenames);
+-    void compare();
++    void compare(); 
+     void options();
+     void save();
+     void about();
+     void help();
+-    void initialize(const QString &filename1, const QString &filename2);
++    void initialize(const QString &filename1, const QString &filename2, const QString &filename3);
+     void updateUi();
+     void updateViews(int index=-1);
+     void controlDockLocationChanged(Qt::DockWidgetArea area);
+@@ -88,7 +88,7 @@ private slots:
+ private:
+     enum Difference {NoDifference, TextualDifference, VisualDifference};
+ 
+-    void createWidgets(const QString &filename1, const QString &filename2);
++    void createWidgets(const QString &filename1, const QString &filename2, const QString &filename3);
+     void createCentralArea();
+     void createDockWidgets();
+     void createConnections();
+@@ -145,6 +145,7 @@ private slots:
+     QScrollArea *area1;
+     QPushButton *setFile2Button;
+     LineEdit *filename2LineEdit;
++    LineEdit *filename3LineEdit;
+     QLabel *comparePages2Label;
+     QLineEdit *pages2LineEdit;
+     Label *page2Label;
