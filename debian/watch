@@ -1,0 +1,2 @@
+version=3
+http://www.qtrac.eu/diffpdf.html diffpdf-(\d+.*)\.tar\.gz
